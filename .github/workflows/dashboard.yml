@@ -40,12 +40,13 @@ jobs:
 
       - name: Aviso a Slack con resumen (webhook)
         if: ${{ success() }}
+        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then echo "Sin SLACK_WEBHOOK_URL; me salto el aviso."; exit 0; fi
           python - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.request, urllib.error
           s = json.load(open("public/summary.json", encoding="utf-8"))
           url = "https://ericrodriguez-cafler.github.io/cafler-rrss-dashboard/"
           L = ["✦ *Resumen semanal · Redes sociales Cafler*"]
@@ -57,8 +58,12 @@ jobs:
           L.append("\U0001F517 Dashboard completo: %s" % url)
           body = json.dumps({"text": "\n".join(L)}).encode("utf-8")
           req = urllib.request.Request(os.environ["SLACK_WEBHOOK_URL"], data=body, headers={"Content-Type": "application/json"})
-          urllib.request.urlopen(req, timeout=30)
-          print("Aviso Slack enviado.")
+          try:
+              r = urllib.request.urlopen(req, timeout=30)
+              print("Aviso Slack enviado. HTTP", r.status)
+          except urllib.error.HTTPError as e:
+              print("FALLO webhook Slack: HTTP", e.code)
+              print(e.read().decode("utf-8", "replace")[:300])
           PY
 
       - name: Subir artefacto de Pages
