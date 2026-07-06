@@ -1,0 +1,67 @@
+name: Cafler · Dashboard RRSS
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generar dashboard.html
+        env:
+          META_TOKEN: ${{ secrets.META_TOKEN }}
+          DASHBOARD_OUT: public/index.html
+        run: |
+          mkdir -p public
+          python cafler_dashboard.py
+          echo "Tamaño del HTML generado:"
+          wc -c public/index.html
+
+      - name: Subir artefacto de Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Desplegar en GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Avisar en Slack (opcional)
+        if: ${{ success() }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "Sin SLACK_WEBHOOK_URL configurado; me salto el aviso."
+            exit 0
+          fi
+          URL="${{ steps.deployment.outputs.page_url }}"
+          curl -s -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"✦ Dashboard de redes sociales actualizado: ${URL} — insights de Facebook e Instagram. Se actualiza solo cada lunes.\"}" \
+            "$SLACK_WEBHOOK_URL" || echo "Aviso Slack falló (no crítico)."
