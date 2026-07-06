@@ -1,5 +1,6 @@
 name: Cafler · Dashboard RRSS
 
+# Se ejecuta cada lunes a las 07:00 UTC (09:00 Madrid) y también a mano.
 on:
   schedule:
     - cron: "0 7 * * 1"
@@ -10,6 +11,7 @@ permissions:
   pages: write
   id-token: write
 
+# Evita solapamientos si un run tarda
 concurrency:
   group: "pages"
   cancel-in-progress: true
@@ -36,6 +38,29 @@ jobs:
           echo "Tamaño del HTML generado:"
           wc -c public/index.html
 
+      - name: Aviso a Slack con resumen (webhook)
+        if: ${{ success() }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then echo "Sin SLACK_WEBHOOK_URL; me salto el aviso."; exit 0; fi
+          python - <<'PY'
+          import json, os, urllib.request
+          s = json.load(open("public/summary.json", encoding="utf-8"))
+          url = "https://ericrodriguez-cafler.github.io/cafler-rrss-dashboard/"
+          L = ["✦ *Resumen semanal · Redes sociales Cafler*"]
+          L.append("\U0001F4CA Esta semana: %s publicaciones · %s interacciones · %s de alcance (Instagram)" % (
+              s.get("week_posts", 0), s.get("week_interactions", 0), s.get("week_reach", 0)))
+          tp = s.get("top_post")
+          if tp:
+              L.append("\U0001F3C6 Top post: %s — %s de alcance → %s" % (tp["account"], tp["reach"], tp["permalink"]))
+          L.append("\U0001F517 Dashboard completo: %s" % url)
+          body = json.dumps({"text": "\n".join(L)}).encode("utf-8")
+          req = urllib.request.Request(os.environ["SLACK_WEBHOOK_URL"], data=body, headers={"Content-Type": "application/json"})
+          urllib.request.urlopen(req, timeout=30)
+          print("Aviso Slack enviado.")
+          PY
+
       - name: Subir artefacto de Pages
         uses: actions/upload-pages-artifact@v3
         with:
@@ -51,17 +76,3 @@ jobs:
       - name: Desplegar en GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-      - name: Avisar en Slack (opcional)
-        if: ${{ success() }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "Sin SLACK_WEBHOOK_URL configurado; me salto el aviso."
-            exit 0
-          fi
-          URL="${{ steps.deployment.outputs.page_url }}"
-          curl -s -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"✦ Dashboard de redes sociales actualizado: ${URL} — insights de Facebook e Instagram. Se actualiza solo cada lunes.\"}" \
-            "$SLACK_WEBHOOK_URL" || echo "Aviso Slack falló (no crítico)."

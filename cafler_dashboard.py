@@ -90,8 +90,9 @@ def fetch(token):
                 "reactions": reactions, "comments": comments, "shares": shares,
                 "reach": None, "impressions": None, "clicks": clicks,
             })
+        # Facebook no expone alcance por página ni por post en la API (deprecado por Meta).
         fb.append({"account": p.get("name"), "id": p.get("id"),
-                   "followers": p.get("fan_count"), "posts": fbposts})
+                   "followers": p.get("fan_count"), "week_reach": None, "posts": fbposts})
 
         # ---------- INSTAGRAM ----------
         iga = p.get("instagram_business_account")
@@ -121,8 +122,16 @@ def fetch(token):
                     "likes": m.get("like_count"), "comments": m.get("comments_count"),
                     "reach": reach, "saved": saved, "interactions": inter,
                 })
+            # Alcance de CUENTA IG (últimos 7 días).
+            ig_reach = None
+            iins = api_safe("/%s/insights" % iga["id"], {"metric": "reach", "period": "week", "access_token": pt})
+            if iins:
+                try:
+                    ig_reach = iins["data"][0]["values"][-1]["value"]
+                except Exception:
+                    pass
             ig.append({"account": "@" + iga.get("username", ""), "id": iga.get("id"),
-                       "followers": iga.get("followers_count"), "posts": igposts})
+                       "followers": iga.get("followers_count"), "week_reach": ig_reach, "posts": igposts})
     return fb, ig
 
 
@@ -179,11 +188,17 @@ def build_summary(fb, ig):
     week = [r for r in rows if r["dt"] and r["dt"] >= cutoff]
     reach_pool = [r for r in (week or rows) if isinstance(r["reach"], int)]
     top = max(reach_pool, key=lambda r: r["reach"]) if reach_pool else None
+    # Alcance general = alcance de cuenta (7 días) sumando FB (página) + IG (cuenta)
+    week_reach = 0
+    for accts in (fb, ig):
+        for a in accts:
+            if isinstance(a.get("week_reach"), int):
+                week_reach += a["week_reach"]
     return {
         "generated_at": now_madrid_str(),
         "week_posts": len(week),
         "week_interactions": sum(r["eng"] for r in week),
-        "week_reach": sum(r["reach"] for r in week if isinstance(r["reach"], int)),
+        "week_reach": week_reach,
         "total_posts": len(rows),
         "top_post": ({"account": top["account"], "reach": top["reach"],
                       "permalink": top["permalink"], "text": top["text"][:120]} if top else None),
@@ -430,14 +445,13 @@ TEMPLATE = '''<style>
     const accs = accountsInScope();
     const wk = posts.filter(p => p.isWeek);
     const sum = (arr,f)=> arr.reduce((s,p)=> s + (typeof f(p)==="number"? f(p):0), 0);
-    const reachWk = wk.filter(p=>typeof p.reach==="number");
-    const reachAll = posts.filter(p=>typeof p.reach==="number");
+    const reachAccs = accs.filter(a=>typeof a.week_reach==="number");
     const followers = accs.reduce((s,a)=> s + (typeof a.followers==="number"? a.followers:0), 0);
     const kpiData = [
       { lab:"Publicaciones", big: wk.length, sub: nf.format(posts.length)+" en total" },
       { lab:"Interacciones", big: sum(wk,p=>p.eng), sub: nf.format(sum(posts,p=>p.eng))+" en total" },
-      { lab:"Alcance", big: reachWk.length? sum(reachWk,p=>p.reach) : null,
-        sub: reachAll.length? nf.format(sum(reachAll,p=>p.reach))+" en total" : "solo Instagram" },
+      { lab:"Alcance", big: reachAccs.length? reachAccs.reduce((s,a)=>s+a.week_reach,0) : null,
+        sub: "personas · Instagram" },
       { lab:"Seguidores", big: followers, sub: accs.length+" perfil"+(accs.length===1?"":"es") },
     ];
     document.getElementById("kpis").innerHTML = kpiData.map(k => `
