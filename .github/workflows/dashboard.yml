@@ -31,6 +31,7 @@ jobs:
       - name: Generar dashboard.html
         env:
           META_TOKEN: ${{ secrets.META_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           DASHBOARD_OUT: public/index.html
         run: |
           mkdir -p public
