@@ -135,6 +135,73 @@ def fetch(token):
     return fb, ig
 
 
+# ---------- YOUTUBE (API key pública, sin OAuth) ----------
+YT_BASE = "https://www.googleapis.com/youtube/v3"
+YT_HANDLES = ["CaflerAI", "CaflerES"]  # sin @
+
+
+def yt_api_safe(path, params):
+    key = os.environ.get("YOUTUBE_API_KEY")
+    if not key:
+        return None
+    params = dict(params)
+    params["key"] = key
+    url = YT_BASE + path + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "cafler-dashboard"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def fetch_youtube():
+    if not os.environ.get("YOUTUBE_API_KEY"):
+        return []
+    channels = []
+    for handle in YT_HANDLES:
+        ch = yt_api_safe("/channels", {"part": "snippet,statistics,contentDetails", "forHandle": handle})
+        if not ch or not ch.get("items"):
+            continue
+        it = ch["items"][0]
+        try:
+            uploads = it["contentDetails"]["relatedPlaylists"]["uploads"]
+        except Exception:
+            uploads = None
+        subs = it.get("statistics", {}).get("subscriberCount")
+        posts = []
+        if uploads:
+            pl = yt_api_safe("/playlistItems", {"part": "contentDetails", "playlistId": uploads, "maxResults": N})
+            vids = [x["contentDetails"]["videoId"] for x in (pl or {}).get("items", []) if x.get("contentDetails")]
+            if vids:
+                vd = yt_api_safe("/videos", {"part": "snippet,statistics", "id": ",".join(vids)})
+                for v in (vd or {}).get("items", []):
+                    st = v.get("statistics", {})
+                    def _int(x):
+                        try:
+                            return int(x)
+                        except Exception:
+                            return None
+                    posts.append({
+                        "id": v["id"], "date": v["snippet"].get("publishedAt"),
+                        "type": "video", "text": truncate(v["snippet"].get("title")),
+                        "permalink": "https://www.youtube.com/watch?v=" + v["id"],
+                        "views": _int(st.get("viewCount")) or 0,
+                        "likes": _int(st.get("likeCount")),
+                        "comments": _int(st.get("commentCount")) or 0,
+                    })
+        channels.append({"account": "@" + handle, "id": it.get("id"),
+                         "followers": _safe_int(subs), "week_reach": None, "posts": posts})
+    return channels
+
+
+def _safe_int(x):
+    try:
+        return int(x)
+    except Exception:
+        return None
+
+
 def now_madrid():
     try:
         from zoneinfo import ZoneInfo
@@ -149,14 +216,17 @@ def now_madrid_str():
     return "%02d %s %d, %02d:%02d" % (now.day, meses[now.month - 1], now.year, now.hour, now.minute)
 
 
-def build_model(fb, ig):
+def build_model(fb, ig, yt=None):
     platforms = {}
     if fb:
         platforms["facebook"] = {"accounts": fb}
     if ig:
         platforms["instagram"] = {"accounts": ig}
-    platforms["youtube"] = {"status": "pending", "label": "Fase 2",
-        "note": "2 canales (@CaflerAI, @CaflerES) - conectar YouTube Data + Analytics API."}
+    if yt:
+        platforms["youtube"] = {"accounts": yt}
+    else:
+        platforms["youtube"] = {"status": "pending", "label": "Fase 2",
+            "note": "2 canales (@CaflerAI, @CaflerES) - conectar YouTube Data API."}
     platforms["linkedin"] = {"status": "pending", "label": "Fase 3",
         "note": "8 perfiles (Global, ES, LATAM, UK, FR, ASIA, PT, US) - requiere aprobacion de app en LinkedIn Marketing API."}
     platforms["tiktok"] = {"status": "pending", "label": "Fase 4",
@@ -173,14 +243,14 @@ def parse_dt(s):
         return None
 
 
-def build_summary(fb, ig):
+def build_summary(fb, ig, yt=None):
     now = now_madrid()
     cutoff = now - timedelta(days=7)
     rows = []
-    for plat, accts in (("facebook", fb), ("instagram", ig)):
+    for plat, accts in (("facebook", fb), ("instagram", ig), ("youtube", yt or [])):
         for a in accts:
             for p in a.get("posts", []):
-                likes = p.get("likes") if plat == "instagram" else p.get("reactions")
+                likes = p.get("reactions") if plat == "facebook" else p.get("likes")
                 eng = sum(v for v in [likes, p.get("comments"), p.get("shares"), p.get("saved")] if isinstance(v, int))
                 rows.append({"plat": plat, "account": a["account"], "dt": parse_dt(p.get("date")),
                              "reach": p.get("reach"), "eng": eng,
@@ -384,14 +454,14 @@ TEMPLATE = '''<style>
     (accounts||[]).forEach(a => {
       const reg = regionKey(a.account);
       (a.posts||[]).forEach(p => {
-        const likes = (platKey === "instagram") ? p.likes : p.reactions;
+        const likes = (platKey === "facebook") ? p.reactions : p.likes;
         const eng = [likes, p.comments, p.shares, p.saved].filter(v => typeof v === "number").reduce((s,v)=>s+v,0);
         const t = new Date(p.date).getTime();
         out.push({ plat: platKey, account: a.account, region: reg, date: p.date,
           isWeek: !isNaN(t) && (NOW - t) <= WEEK_MS, text: p.text||"",
           type: p.type || (platKey==="facebook" ? "post" : ""), permalink: p.permalink,
           likes, comments: p.comments, shares: p.shares, saved: p.saved,
-          reach: p.reach, clicks: p.clicks, eng });
+          reach: p.reach, clicks: p.clicks, views: p.views, eng });
       });
     });
     return out;
@@ -494,6 +564,7 @@ TEMPLATE = '''<style>
     let chips;
     if(p.plat === "instagram") chips = [ chip("likes",p.likes), chip("coment.",p.comments), chip("guard.",p.saved), chip("alcance",p.reach) ];
     else if(p.plat === "facebook") chips = [ chip("reacc.",p.likes), chip("coment.",p.comments), chip("comp.",p.shares), chip("clics",p.clicks) ];
+    else if(p.plat === "youtube") chips = [ chip("vistas",p.views), chip("likes",p.likes), chip("coment.",p.comments) ];
     else chips = [ chip("likes",p.likes), chip("coment.",p.comments), chip("alcance",p.reach) ];
     const flag = REGIONS[p.region] ? REGIONS[p.region].flag : "";
     return `
@@ -563,7 +634,8 @@ TEMPLATE = '''<style>
 def main():
     token = read_token()
     fb, ig = fetch(token)
-    model = build_model(fb, ig)
+    yt = fetch_youtube()
+    model = build_model(fb, ig, yt)
     data_json = json.dumps(model, ensure_ascii=False)
     html = TEMPLATE.replace("__DATA_JSON__", data_json)
     out = os.environ.get("DASHBOARD_OUT", "dashboard.html")
@@ -573,14 +645,15 @@ def main():
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
     # summary.json al lado (para el aviso de Slack)
-    summary = build_summary(fb, ig)
+    summary = build_summary(fb, ig, yt)
     spath = os.path.join(outdir, "summary.json") if outdir else "summary.json"
     with open(spath, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
     fbc = sum(len(a["posts"]) for a in fb)
     igc = sum(len(a["posts"]) for a in ig)
-    print("OK -> %s (+ summary.json) | FB %d paginas (%d posts) | IG %d cuentas (%d posts) | semana: %d posts" % (
-        out, len(fb), fbc, len(ig), igc, summary["week_posts"]))
+    ytc = sum(len(a["posts"]) for a in yt)
+    print("OK -> %s (+ summary.json) | FB %d pag (%d posts) | IG %d ctas (%d) | YT %d canales (%d) | semana: %d posts" % (
+        out, len(fb), fbc, len(ig), igc, len(yt), ytc, summary["week_posts"]))
 
 
 if __name__ == "__main__":
