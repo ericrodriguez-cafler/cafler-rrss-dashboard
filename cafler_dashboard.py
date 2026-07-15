@@ -202,6 +202,68 @@ def _safe_int(x):
         return None
 
 
+# ---------- TIKTOK (sandbox: refresh token -> access token -> datos) ----------
+def fetch_tiktok():
+    ck = os.environ.get("TIKTOK_CLIENT_KEY")
+    cs = os.environ.get("TIKTOK_CLIENT_SECRET")
+    rt = os.environ.get("TIKTOK_REFRESH_TOKEN")
+    if not (ck and cs and rt):
+        return []
+    # 1) refrescar access token
+    try:
+        data = urllib.parse.urlencode({
+            "client_key": ck, "client_secret": cs,
+            "grant_type": "refresh_token", "refresh_token": rt,
+        }).encode("utf-8")
+        req = urllib.request.Request("https://open.tiktokapis.com/v2/oauth/token/", data=data,
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            tok = json.loads(r.read().decode("utf-8"))
+        at = tok.get("access_token")
+        if not at:
+            return []
+    except Exception:
+        return []
+
+    def tt(url, body=None):
+        h = {"Authorization": "Bearer " + at}
+        payload = None
+        if body is not None:
+            h["Content-Type"] = "application/json"
+            payload = json.dumps(body).encode("utf-8")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, data=payload, headers=h), timeout=30) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    info = tt("https://open.tiktokapis.com/v2/user/info/?" + urllib.parse.urlencode(
+        {"fields": "open_id,display_name,follower_count,likes_count,video_count"}))
+    usr = (info or {}).get("data", {}).get("user", {})
+    vd = tt("https://open.tiktokapis.com/v2/video/list/?" + urllib.parse.urlencode(
+        {"fields": "id,title,view_count,like_count,comment_count,share_count,create_time"}),
+        body={"max_count": N})
+    vids = (vd or {}).get("data", {}).get("videos", [])
+    posts = []
+    for v in vids:
+        date = None
+        ts = v.get("create_time")
+        if ts:
+            try:
+                date = datetime.fromtimestamp(int(ts), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+            except Exception:
+                pass
+        posts.append({
+            "id": v.get("id"), "date": date, "type": "video",
+            "text": truncate(v.get("title")),
+            "permalink": "https://www.tiktok.com/@cafler.ai/video/" + str(v.get("id")),
+            "views": v.get("view_count"), "likes": v.get("like_count"),
+            "comments": v.get("comment_count"), "shares": v.get("share_count"),
+        })
+    return [{"account": "@cafler.ai", "id": usr.get("open_id"),
+             "followers": usr.get("follower_count"), "week_reach": None, "posts": posts}]
+
+
 def now_madrid():
     try:
         from zoneinfo import ZoneInfo
@@ -216,7 +278,7 @@ def now_madrid_str():
     return "%02d %s %d, %02d:%02d" % (now.day, meses[now.month - 1], now.year, now.hour, now.minute)
 
 
-def build_model(fb, ig, yt=None):
+def build_model(fb, ig, yt=None, tt=None):
     platforms = {}
     if fb:
         platforms["facebook"] = {"accounts": fb}
@@ -229,8 +291,11 @@ def build_model(fb, ig, yt=None):
             "note": "2 canales (@CaflerAI, @CaflerES) - conectar YouTube Data API."}
     platforms["linkedin"] = {"status": "pending", "label": "Fase 3",
         "note": "8 perfiles (Global, ES, LATAM, UK, FR, ASIA, PT, US) - requiere aprobacion de app en LinkedIn Marketing API."}
-    platforms["tiktok"] = {"status": "pending", "label": "Fase 4",
-        "note": "@cafler.ai - requiere aprobacion de TikTok Business API."}
+    if tt:
+        platforms["tiktok"] = {"accounts": tt}
+    else:
+        platforms["tiktok"] = {"status": "pending", "label": "Fase 4",
+            "note": "@cafler.ai - requiere aprobacion de TikTok API."}
     return {"generated_at": now_madrid_str(), "platforms": platforms}
 
 
@@ -243,11 +308,11 @@ def parse_dt(s):
         return None
 
 
-def build_summary(fb, ig, yt=None):
+def build_summary(fb, ig, yt=None, tt=None):
     now = now_madrid()
     cutoff = now - timedelta(days=7)
     rows = []
-    for plat, accts in (("facebook", fb), ("instagram", ig), ("youtube", yt or [])):
+    for plat, accts in (("facebook", fb), ("instagram", ig), ("youtube", yt or []), ("tiktok", tt or [])):
         for a in accts:
             for p in a.get("posts", []):
                 likes = p.get("reactions") if plat == "facebook" else p.get("likes")
@@ -565,6 +630,7 @@ TEMPLATE = '''<style>
     if(p.plat === "instagram") chips = [ chip("likes",p.likes), chip("coment.",p.comments), chip("guard.",p.saved), chip("alcance",p.reach) ];
     else if(p.plat === "facebook") chips = [ chip("reacc.",p.likes), chip("coment.",p.comments), chip("comp.",p.shares), chip("clics",p.clicks) ];
     else if(p.plat === "youtube") chips = [ chip("vistas",p.views), chip("likes",p.likes), chip("coment.",p.comments) ];
+    else if(p.plat === "tiktok") chips = [ chip("vistas",p.views), chip("likes",p.likes), chip("coment.",p.comments), chip("comp.",p.shares) ];
     else chips = [ chip("likes",p.likes), chip("coment.",p.comments), chip("alcance",p.reach) ];
     const flag = REGIONS[p.region] ? REGIONS[p.region].flag : "";
     return `
@@ -635,7 +701,8 @@ def main():
     token = read_token()
     fb, ig = fetch(token)
     yt = fetch_youtube()
-    model = build_model(fb, ig, yt)
+    tt = fetch_tiktok()
+    model = build_model(fb, ig, yt, tt)
     data_json = json.dumps(model, ensure_ascii=False)
     html = TEMPLATE.replace("__DATA_JSON__", data_json)
     out = os.environ.get("DASHBOARD_OUT", "dashboard.html")
@@ -645,15 +712,16 @@ def main():
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
     # summary.json al lado (para el aviso de Slack)
-    summary = build_summary(fb, ig, yt)
+    summary = build_summary(fb, ig, yt, tt)
     spath = os.path.join(outdir, "summary.json") if outdir else "summary.json"
     with open(spath, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
     fbc = sum(len(a["posts"]) for a in fb)
     igc = sum(len(a["posts"]) for a in ig)
     ytc = sum(len(a["posts"]) for a in yt)
-    print("OK -> %s (+ summary.json) | FB %d pag (%d posts) | IG %d ctas (%d) | YT %d canales (%d) | semana: %d posts" % (
-        out, len(fb), fbc, len(ig), igc, len(yt), ytc, summary["week_posts"]))
+    ttc = sum(len(a["posts"]) for a in tt)
+    print("OK -> %s (+ summary.json) | FB %d pag (%d) | IG %d (%d) | YT %d (%d) | TT %d (%d) | semana: %d posts" % (
+        out, len(fb), fbc, len(ig), igc, len(yt), ytc, len(tt), ttc, summary["week_posts"]))
 
 
 if __name__ == "__main__":
