@@ -581,14 +581,14 @@ TEMPLATE = '''<style>
     const wk = posts.filter(p => p.isWeek);
     const sum = (arr,f)=> arr.reduce((s,p)=> s + (typeof f(p)==="number"? f(p):0), 0);
     const igReach = accs.filter(a=>typeof a.week_reach==="number").reduce((s,a)=>s+a.week_reach,0);
-    const vidViews = wk.filter(p=>(p.plat==="youtube"||p.plat==="tiktok") && typeof p.views==="number").reduce((s,p)=>s+p.views,0);
-    const hasVis = accs.some(a=>typeof a.week_reach==="number") || wk.some(p=>(p.plat==="youtube"||p.plat==="tiktok") && typeof p.views==="number");
+    const vidViews = posts.filter(p=>(p.plat==="youtube"||p.plat==="tiktok") && typeof p.views==="number").reduce((s,p)=>s+p.views,0);
+    const hasVis = accs.some(a=>typeof a.week_reach==="number") || posts.some(p=>(p.plat==="youtube"||p.plat==="tiktok") && typeof p.views==="number");
     const followers = accs.reduce((s,a)=> s + (typeof a.followers==="number"? a.followers:0), 0);
     const kpiData = [
       { lab:"Publicaciones", big: wk.length, sub: nf.format(posts.length)+" en total" },
       { lab:"Interacciones", big: sum(wk,p=>p.eng), sub: nf.format(sum(posts,p=>p.eng))+" en total" },
       { lab:"Alcance / vistas", big: hasVis ? (igReach + vidViews) : null,
-        sub: "alcance IG + vistas YT/TikTok" },
+        sub: "alcance IG (7d) + vistas YT/TikTok" },
       { lab:"Seguidores", big: followers, sub: accs.length+" perfil"+(accs.length===1?"":"es") },
     ];
     document.getElementById("kpis").innerHTML = kpiData.map(k => `
