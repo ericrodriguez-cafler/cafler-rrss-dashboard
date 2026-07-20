@@ -54,8 +54,11 @@ jobs:
           s = json.load(open("public/summary.json", encoding="utf-8"))
           url = "https://ericrodriguez-cafler.github.io/cafler-rrss-dashboard/"
           L = ["✦ *Resumen semanal · Redes sociales Cafler*"]
-          L.append("\U0001F4CA Esta semana: %s publicaciones · %s interacciones · %s de alcance (Instagram)" % (
-              s.get("week_posts", 0), s.get("week_interactions", 0), s.get("week_reach", 0)))
+          nf = s.get("new_followers")
+          tf = s.get("total_followers", 0)
+          foll = ("%+d seguidores nuevos" % nf) if isinstance(nf, int) else ("%d seguidores (base inicial)" % tf)
+          L.append("\U0001F4CA Esta semana: %s publicaciones · %s interacciones · %s" % (
+              s.get("week_posts", 0), s.get("week_interactions", 0), foll))
           tp = s.get("top_post")
           if tp:
               L.append("\U0001F3C6 Top post: %s — %s de alcance → %s" % (tp["account"], tp["reach"], tp["permalink"]))

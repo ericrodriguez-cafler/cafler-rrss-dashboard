@@ -308,6 +308,28 @@ def parse_dt(s):
         return None
 
 
+def _total_followers(fb, ig, yt, tt):
+    tot = 0
+    for accts in (fb, ig, yt or [], tt or []):
+        for a in accts:
+            f = a.get("followers")
+            if isinstance(f, int):
+                tot += f
+    return tot
+
+
+def _prev_total_followers():
+    """Lee el total de seguidores del summary.json ya publicado (semana anterior)."""
+    try:
+        url = "https://ericrodriguez-cafler.github.io/cafler-rrss-dashboard/summary.json"
+        with urllib.request.urlopen(url, timeout=20) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        v = d.get("total_followers")
+        return v if isinstance(v, int) else None
+    except Exception:
+        return None
+
+
 def build_summary(fb, ig, yt=None, tt=None):
     now = now_madrid()
     cutoff = now - timedelta(days=7)
@@ -329,11 +351,16 @@ def build_summary(fb, ig, yt=None, tt=None):
         for a in accts:
             if isinstance(a.get("week_reach"), int):
                 week_reach += a["week_reach"]
+    total_followers = _total_followers(fb, ig, yt, tt)
+    prev_f = _prev_total_followers()
+    new_followers = (total_followers - prev_f) if isinstance(prev_f, int) else None
     return {
         "generated_at": now_madrid_str(),
         "week_posts": len(week),
         "week_interactions": sum(r["eng"] for r in week),
         "week_reach": week_reach,
+        "total_followers": total_followers,
+        "new_followers": new_followers,
         "total_posts": len(rows),
         "top_post": ({"account": top["account"], "reach": top["reach"],
                       "permalink": top["permalink"], "text": top["text"][:120]} if top else None),
